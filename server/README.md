@@ -1,14 +1,47 @@
-# Server DNS Handler
-این ماژول یک سرور DNS است که بسته‌های رمزنگاری شده از کلاینت را بازمی‌کند و داده‌های downstream را در TXT رکورد برمی‌گرداند.
+# Aether Server
 
-## اجزاء کلیدی
-- `dns_handler.go`: `Server`، `ServerConfig`، مدیریت جلسه‌ها، reassembly بر اساس Seq، انکود کردن/دیکد کردن payload و ساخت پاسخ TXT را پیاده‌سازی می‌کند.
-- `main.go`: جایگزینی ساده تا بسته قابل کامپایل بماند، در آینده entry point اصلی را در این فایل پیاده کنید.
+The server acts as a specialized, authoritative DNS nameserver. It listens for incoming encrypted queries, decapsulates the tunnel traffic, and proxies it to the public internet.
 
-## روند کار
-1. درخواست DNS را تحلیل می‌کند، domain را به رشته رمز شده تبدیل می‌کند، سپس nonce+ciphertext را با ChaCha20-Poly1305 باز می‌کند.
-2. بسته‌ها را در Radix tree session نگه می‌دارد تا دنباله‌های ناقص منتظر بمانند.
-3. داده‌های downstream را یا از `PayloadSink` می‌گیرد یا ACK می‌فرستد، سپس آن‌ها را رمزنگاری کرده و داخل TXT پاسخ DNS قرار می‌دهد.
+## ⚙️ How it Works
 
-## توسعه
-برای نوشتن خروجی به شبکه/فایل از `PayloadSink` استفاده کنید؛ در آینده handler UDP را با TLS یا رابط کنترل‌شده ترکیب کنید.
+1.  **Ingestion**: Listens on UDP Port 53 (or 5353 for dev).
+2.  **Decapsulation**:
+    *   Parses the DNS Query Name (QNAME).
+    *   Decodes from **Base32**.
+    *   Decrypts using **ChaCha20-Poly1305**.
+    *   Decompresses using **Zstd**.
+3.  **State Management**:
+    *   Maintains a `sessionState` for each active user connection.
+    *   Reassembles fragmented 110-byte chunks into a continuous stream.
+4.  **Egress**:
+    *   Opens a real TCP connection to the target requested by the client.
+    *   Reads response data from the target.
+5.  **Response**:
+    *   Packets response data into DNS **TXT Records**.
+    *   Encrypts -> Compresses -> Encodes -> Sends back to client.
+
+## 🧹 Garbage Collection
+
+Since DNS is stateless (UDP), the server has no explicit way to know when a client has disconnected abnormally.
+*   **Mechanism**: A background "Garbage Collector" runs every **1 minute**.
+*   **Policy**: Any session with no activity for **> 5 minutes** is forcefully closed and removed from memory.
+*   **Benefit**: Prevents memory leaks on low-resource VPS or router deployments.
+
+## 🐳 Deployment (Docker & Mikrotik)
+
+The server is optimized to run as a single static binary in a scratch/alpine container.
+
+### Docker Compose
+```yaml
+version: '3'
+services:
+  aether-server:
+    image: aether-server:latest
+    network_mode: host
+    restart: always
+    environment:
+      - AETHER_PSK=your_secret_key
+      - AETHER_DOMAIN=ns1.example.com
+      - AETHER_LISTEN_ADDR=0.0.0.0:53
+```
+*Note: `network_mode: host` is recommended for UDP performance.*
