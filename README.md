@@ -1,23 +1,21 @@
-# Aether 🌌
-**A High-Performance Stealth DNS Tunneling Tool**
+# Aether dYOO
+یک ابزار DNS Tunneling کم‌حجم و امن برای محیط‌های محدود مثل کانتینر میکروتیک یا اندروید.
 
-Aether is a lightweight, secure, and fast DNS tunneling solution specifically designed to run on resource-constrained environments like **MikroTik containers** and **Android devices**.
+## نقشه کلی
+- `common/` حاوی کتابخانه‌ای است که پروتکل، رمزنگاری، فشرده‌سازی و مسیریابی (ردیابی CIDRها) را تعریف می‌کند.
+- `client/` شامل پراکسی SOCKS5 و Scheduler می‌شود که ترافیک را قطعه‌قطعه کرده، رمزنگاری می‌کند و بوسیله‌ی DNS/UDP ارسال می‌کند.
+- `server/` یک DNS خالص است که درخواست‌ها را از رمزنگاری باز می‌کند، ترتیب‌بندی، و بسته‌ها را به برنامه‌ی نهایی تحویل می‌دهد.
 
-## ✨ Key Features
-- **Maximum Payload:** Optimized DNS label packing (up to 253 chars per query).
-- **Fast Compression:** Powered by `zstd` for maximum data throughput.
-- **Modern Encryption:** Uses `ChaCha20-Poly1305` (ARM-optimized) with Pre-Shared Keys (PSK).
-- **Stealthy:** Mimics standard DNS traffic patterns to bypass DPI firewalls.
-- **SOCKS5 Interface:** Seamless integration with any browser or OS.
+## مراحل روشن بودن سرویس
+1. پیکربندی `config.json` (فعلاً ساختار پایه‌ ندارد، برایتان اجازه می‌دهد PSK، DNS و روت را تعریف کنید).
+2. آماده کردن فایل `iran_ips.txt` با CIDRهای داخلی برای bypass.
+3. اجرای `RunClient` از بسته‌ی `client` با کانتکست و اتصالات لازم.
+4. قرائت پاسخ‌های TXT از DNS برای downstream و ارسال به چشم‌انداز نهایی.
 
-## 🛠 Project Structure
-- `/common`: Core protocol logic, compression, and encryption.
-- `/client`: SOCKS5 proxy server and DNS query scheduler.
-- `/server`: Authoritative DNS-style listener and packet reassembler.
+## وضعیت فعلی
+- راه‌اندازی کانال‌های `context.Context` برای خاموش‌سازی نرم.
+- کد به صورت کتابخانه در دسترس است، برای gomobile قابل اتصال است.
+- تست‌های واحد هنوز پیاده‌سازی نشده؛ فقط `go test ./...` را برای اطمینان از بیلد می‌توان اجرا کرد.
 
-## 🚀 Quick Start (Docker Test)
-1. **Clone the project** and navigate to the directory.
-2. **Configure:** Edit `config.json` with your server IP and PSK.
-3. **Build & Run:**
-   ```bash
-   docker-compose up --build
+## نکته درباره گیت
+از اینجا به بعد، اگر قصد دارید روی نسخه ۱ برود، بعد از `git add`/`commit`، دستور `git push origin main` را خودتان اجرا کنید چون دسترسی push ندارم.
