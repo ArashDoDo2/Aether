@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"aether/server"
+	"github.com/joho/godotenv"
 )
 
 func main() {
@@ -21,9 +22,19 @@ func main() {
 	dictPath := flag.String("dict", "", "optional path to zstd dictionary")
 	flag.Parse()
 
-	if len(*psk) != 32 {
-		log.Fatalf("psk must be exactly 32 bytes, got %d", len(*psk))
+	loadEnv()
+
+	resolvedPSK, pskSource := resolveConfig(*psk, "AETHER_PSK", "")
+	if resolvedPSK == "" {
+		log.Fatal("psk must be provided via flag or AETHER_PSK")
 	}
+	log.Printf("Using PSK from %s", pskSource)
+
+	addrValue, addrSource := resolveConfig(*addr, "AETHER_LISTEN_ADDR", "0.0.0.0:5353")
+	log.Printf("Using listen address from %s", addrSource)
+
+	domainValue, domainSource := resolveConfig(*domain, "AETHER_DOMAIN", "aether.local")
+	log.Printf("Using domain suffix from %s", domainSource)
 
 	var dict []byte
 	if *dictPath != "" {
@@ -35,9 +46,9 @@ func main() {
 	}
 
 	cfg := server.ServerConfig{
-		Addr:         *addr,
-		PSK:          []byte(*psk),
-		DomainSuffix: *domain,
+		Addr:         addrValue,
+		PSK:          []byte(resolvedPSK),
+		DomainSuffix: domainValue,
 		Dictionary:   dict,
 	}
 
@@ -49,11 +60,29 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	fmt.Printf("listening on %s for domain %s\n", *addr, *domain)
+	fmt.Printf("listening on %s for domain %s\n", addrValue, domainValue)
 	if err := srv.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatalf("server error: %v", err)
 	}
 
 	fmt.Println("server stopped")
 	time.Sleep(100 * time.Millisecond)
+}
+
+func loadEnv() {
+	if err := godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		log.Printf("failed to load .env: %v", err)
+	}
+}
+
+func resolveConfig(flagVal, envKey, def string) (string, string) {
+	if flagVal != "" {
+		return flagVal, "flag"
+	}
+	if envKey != "" {
+		if v := os.Getenv(envKey); v != "" {
+			return v, fmt.Sprintf("environment variable %s", envKey)
+		}
+	}
+	return def, "default"
 }

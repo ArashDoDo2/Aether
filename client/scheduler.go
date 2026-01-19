@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/rand"
 	"net"
 	"strconv"
@@ -42,14 +43,16 @@ type SchedulerConfig struct {
 	Timeout      time.Duration
 	Router       *common.Router
 	Dialer       Dialer
-	Downstream   chan<- []byte
+	Downstream   chan<- DownstreamMessage
 }
 
 type sendTask struct {
-	seq      uint16
-	buf      []byte
-	dest     net.IP
-	destPort uint16
+	seq        uint16
+	buf        []byte
+	dest       net.IP
+	destPort   uint16
+	sessionID  uint32
+	packetType common.PacketType
 }
 
 // Scheduler batches payloads and sends them through DNS while respecting rate limits.
@@ -62,6 +65,7 @@ type Scheduler struct {
 	sequence   uint32
 	retries    map[uint16]int
 	retransmit []sendTask
+	metaSent   map[uint32]bool
 }
 
 // NewScheduler creates and validates a scheduler instance.
@@ -107,6 +111,7 @@ func NewScheduler(cfg SchedulerConfig) (*Scheduler, error) {
 		codec:     codec,
 		sessionID: rand.Uint32(),
 		retries:   make(map[uint16]int),
+		metaSent:  make(map[uint32]bool),
 	}, nil
 }
 
@@ -159,7 +164,11 @@ func (s *Scheduler) handlePayload(ctx context.Context, payload SocksPayload, tic
 		return nil
 	}
 
-	tasks := s.prepareTasks(payload.Data, payload.Dest, payload.DestPort)
+	if err := s.ensureMetadata(ctx, payload.SessionID, payload.Dest, payload.DestPort, tick); err != nil {
+		return err
+	}
+
+	tasks := s.prepareTasks(payload.Data, payload.Dest, payload.DestPort, payload.SessionID)
 	for _, task := range tasks {
 		if err := s.sendWithRate(ctx, task, tick); err != nil {
 			s.scheduleRetransmit(task)
@@ -168,7 +177,7 @@ func (s *Scheduler) handlePayload(ctx context.Context, payload SocksPayload, tic
 	return nil
 }
 
-func (s *Scheduler) prepareTasks(payload []byte, dest net.IP, destPort uint16) []sendTask {
+func (s *Scheduler) prepareTasks(payload []byte, dest net.IP, destPort uint16, sessionID uint32) []sendTask {
 	if len(payload) == 0 {
 		return nil
 	}
@@ -201,6 +210,27 @@ func (s *Scheduler) sendWithRate(ctx context.Context, task sendTask, tick <-chan
 	return s.sendChunk(ctx, task)
 }
 
+func (s *Scheduler) ensureMetadata(ctx context.Context, sessionID uint32, dest net.IP, destPort uint16, tick <-chan time.Time) error {
+	if dest == nil || destPort == 0 || s.metaSent[sessionID] {
+		return nil
+	}
+	meta := sendTask{
+		sessionID:  sessionID,
+		packetType: common.PacketTypeCtrl,
+		buf:        s.buildMetaPayload(dest, destPort),
+	}
+	if err := s.sendWithRate(ctx, meta, tick); err != nil {
+		s.scheduleRetransmit(meta)
+		return err
+	}
+	s.metaSent[sessionID] = true
+	return nil
+}
+
+func (s *Scheduler) buildMetaPayload(dest net.IP, port uint16) []byte {
+	return []byte(fmt.Sprintf("%s:%d", dest.String(), port))
+}
+
 func (s *Scheduler) waitForTick(ctx context.Context, tick <-chan time.Time) error {
 	select {
 	case <-ctx.Done():
@@ -212,10 +242,13 @@ func (s *Scheduler) waitForTick(ctx context.Context, tick <-chan time.Time) erro
 
 func (s *Scheduler) sendChunk(ctx context.Context, task sendTask) error {
 	header := common.PacketHeader{
-		Type:      common.PacketTypeData,
-		Sequence:  task.seq,
-		SessionID: s.sessionID,
+		Type:     task.packetType,
+		Sequence: task.seq,
 	}
+	if header.Type == 0 {
+		header.Type = common.PacketTypeData
+	}
+	header.SessionID = task.sessionID
 	payload := common.SerializePacket(header, task.buf)
 
 	compressed, err := s.codec.Compress(payload)
@@ -318,19 +351,23 @@ func (s *Scheduler) handleResponse(resp []byte) error {
 		return nil
 	case common.PacketTypeData:
 		delete(s.retries, header.Sequence)
-		s.handleDownstream(payload)
+		s.handleDownstream(header.SessionID, payload)
 		return nil
 	default:
 		return errors.New("unexpected packet type")
 	}
 }
 
-func (s *Scheduler) handleDownstream(payload []byte) {
+func (s *Scheduler) handleDownstream(sessionID uint32, payload []byte) {
 	if len(payload) == 0 || s.cfg.Downstream == nil {
 		return
 	}
+	msg := DownstreamMessage{
+		SessionID: sessionID,
+		Payload:   append([]byte(nil), payload...),
+	}
 	select {
-	case s.cfg.Downstream <- append([]byte(nil), payload...):
+	case s.cfg.Downstream <- msg:
 	default:
 	}
 }

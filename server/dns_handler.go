@@ -143,9 +143,18 @@ func (s *Server) handlePacket(req []byte) ([]byte, error) {
 	}
 
 	state := s.getSession(header.SessionID)
-	state.insert(header.Sequence, payload)
-	if contiguous := state.drainContiguous(); len(contiguous) > 0 {
-		s.deliverToSink(header.SessionID, contiguous)
+	switch header.Type {
+	case common.PacketTypeCtrl:
+		if err := s.handleMeta(header.SessionID, payload, state); err != nil {
+			return nil, err
+		}
+	case common.PacketTypeData:
+		state.insert(header.Sequence, payload)
+		if contiguous := state.drainContiguous(); len(contiguous) > 0 {
+			if err := s.forwardToRemote(header.SessionID, contiguous); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	respPacket := s.buildResponsePayload(header.SessionID, header.Sequence, state)
@@ -214,13 +223,6 @@ func (s *Server) buildResponsePayload(sessionID uint32, ackSeq uint16, state *se
 		SessionID: sessionID,
 	}
 	return common.SerializePacket(ack, nil)
-}
-
-func (s *Server) deliverToSink(sessionID uint32, data []byte) {
-	if s.cfg.PayloadSink == nil {
-		return
-	}
-	s.cfg.PayloadSink.Deliver(sessionID, append([]byte(nil), data...))
 }
 
 func (s *Server) getSession(sessionID uint32) *sessionState {
@@ -311,6 +313,69 @@ func buildDNSResponse(id uint16, domain, txt string, qtype, qclass uint16) ([]by
 	return buf.Bytes(), nil
 }
 
+func (s *Server) handleMeta(sessionID uint32, payload []byte, state *sessionState) error {
+	remoteAddr := strings.TrimSpace(string(payload))
+	if remoteAddr == "" {
+		return errors.New("empty remote address")
+	}
+	return s.establishRemote(sessionID, remoteAddr, state)
+}
+
+func (s *Server) establishRemote(sessionID uint32, remoteAddr string, state *sessionState) error {
+	conn, err := net.Dial("tcp", remoteAddr)
+	if err != nil {
+		return err
+	}
+	state.setRemote(conn, remoteAddr)
+	go s.copyRemote(sessionID, conn)
+	return nil
+}
+
+func (s *Server) copyRemote(sessionID uint32, conn net.Conn) {
+	buf := make([]byte, 4096)
+	for {
+		conn.SetReadDeadline(time.Now().Add(time.Second))
+		n, err := conn.Read(buf)
+		if n > 0 {
+			data := append([]byte(nil), buf[:n]...)
+			s.QueueDownstream(sessionID, data)
+		}
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				continue
+			}
+			break
+		}
+	}
+	s.cleanupRemote(sessionID)
+}
+
+func (s *Server) cleanupRemote(sessionID uint32) {
+	s.mu.Lock()
+	state, ok := s.sessions[sessionID]
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	state.closeRemote()
+}
+
+func (s *Server) forwardToRemote(sessionID uint32, payload []byte) error {
+	s.mu.Lock()
+	state, ok := s.sessions[sessionID]
+	s.mu.Unlock()
+	if !ok {
+		return errors.New("unknown session")
+	}
+	conn := state.remoteConn
+	if conn == nil {
+		return errors.New("remote connection not established")
+	}
+	conn.SetWriteDeadline(time.Now().Add(time.Second))
+	_, err := conn.Write(payload)
+	return err
+}
+
 func writeName(buf *bytes.Buffer, domain string) {
 	for _, label := range strings.Split(domain, ".") {
 		if label == "" {
@@ -345,6 +410,8 @@ type sessionState struct {
 	pending       map[uint16][]byte
 	downstream    [][]byte
 	downstreamSeq uint16
+	remoteConn    net.Conn
+	remoteAddr    string
 }
 
 func (s *sessionState) insert(seq uint16, payload []byte) {
@@ -404,4 +471,23 @@ func (s *sessionState) nextDownstreamSeq() uint16 {
 	seq := s.downstreamSeq
 	s.downstreamSeq++
 	return seq
+}
+
+func (s *sessionState) setRemote(conn net.Conn, addr string) {
+	s.mu.Lock()
+	if s.remoteConn != nil {
+		s.remoteConn.Close()
+	}
+	s.remoteConn = conn
+	s.remoteAddr = addr
+	s.mu.Unlock()
+}
+
+func (s *sessionState) closeRemote() {
+	s.mu.Lock()
+	if s.remoteConn != nil {
+		s.remoteConn.Close()
+		s.remoteConn = nil
+	}
+	s.mu.Unlock()
 }
