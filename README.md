@@ -116,3 +116,11 @@ Now configure your browser or OS to use **SOCKS5 Proxy** at `127.0.0.1:1080`.
 
 ## 📜 License
 Private / Proprietary.
+
+## Container Deployment
+
+The repo ships with a multi-stage Dockerfile that builds both client and server binaries and a docker-compose stack that brings them up together.
+
+Populate .env (see .env.example) with PSK, domain, server port, DNS server, and any routing files, then run docker compose up --build.
+
+docker compose exposes UDP port  for the server and TCP 1080 for the client. The client service mounts iran_ips.txt, uses the CIDR router list, and reuses the same .env values for domain, DNS endpoint, and PSK.

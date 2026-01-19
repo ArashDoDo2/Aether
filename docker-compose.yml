@@ -1,0 +1,45 @@
+version: "3.8"
+
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aether-server:latest
+    restart: unless-stopped
+    environment:
+      - AETHER_PSK
+      - AETHER_DOMAIN
+      - AETHER_LISTEN_ADDR
+      - AETHER_SERVER_PORT
+    command: >
+      /usr/local/bin/aether-server
+        -addr ${AETHER_LISTEN_ADDR:-0.0.0.0:${AETHER_SERVER_PORT:-5353}}
+        -psk ${AETHER_PSK}
+        -domain ${AETHER_DOMAIN:-aether.local}
+    ports:
+      - "${AETHER_SERVER_PORT:-5353}:${AETHER_SERVER_PORT:-5353}/udp"
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aether-client:latest
+    restart: unless-stopped
+    depends_on:
+      - server
+    environment:
+      - AETHER_PSK
+      - AETHER_DOMAIN
+      - AETHER_DNS_SERVER
+    volumes:
+      - ./iran_ips.txt:/app/iran_ips.txt:ro
+    command: >
+      /usr/local/bin/aether-client
+        -listen 0.0.0.0:1080
+        -dns ${AETHER_DNS_SERVER:-server:${AETHER_SERVER_PORT:-5353}}
+        -domain ${AETHER_DOMAIN:-aether.local}
+        -psk ${AETHER_PSK}
+        -router /app/iran_ips.txt
+    ports:
+      - "1080:1080"
