@@ -28,16 +28,16 @@ sequenceDiagram
     participant Target as Target Website
 
     App->>Client: SOCKS5 Connection (TCP)
-    Note over Client: Encrypt -> Compress -> Base32
+    Note over Client: Compress -> Encrypt -> Base32
     Client->>DNS: DNS Query (A.B.C.domain.com)
     DNS->>Server: Forward Query
-    Note over Server: Decrypt -> Decompress -> Reassemble
+    Note over Server: Base32 Decode -> Decrypt -> Decompress
     Server->>Target: TCP Connect / Write
     Target-->>Server: Response Data
-    Note over Server: Queue -> Chunk -> Encrypt -> TXT Record
+    Note over Server: Queue -> Chunk -> Compress -> Encrypt -> Base32
     Server-->>DNS: DNS TXT Response
     DNS-->>Client: Forward Response
-    Note over Client: Decrypt -> Decompress -> Write to Socket
+    Note over Client: Base32 Decode -> Decrypt -> Decompress
     Client-->>App: Data Stream
 ```
 
