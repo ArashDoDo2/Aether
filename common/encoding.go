@@ -1,27 +1,34 @@
 package common
 
 import (
-	"encoding/base64"
+	"encoding/base32"
 	"errors"
+	"strings"
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
 )
 
-var urlSafeEncoding = base64.RawURLEncoding
+// Use standard Base32 encoding but lower-cased because DNS is case-insensitive.
+// We'll handle the case conversion manually or use a custom encoder if needed.
+// However, standard Base32 uses A-Z, 2-7. DNS handles A-Z case-insensitively.
+// So we can use StdEncoding with NoPadding.
+var dnsEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 // DefaultStaticDictionary contains a handful of repeated tokens typical for
 // DNS tunneling so that small payloads benefit from compression.
 var DefaultStaticDictionary = []byte("aether-dns-static-dictionary-seed")
 
-// EncodeBase64URL encodes bytes using the URL-safe variant without padding.
+// EncodeBase64URL encodes bytes using Base32 (no padding).
+// We return lowercase to be safe with aggressive DNS normalizers.
 func EncodeBase64URL(src []byte) string {
-	return urlSafeEncoding.EncodeToString(src)
+	return strings.ToLower(dnsEncoding.EncodeToString(src))
 }
 
-// DecodeBase64URL decodes a URL-safe string produced by EncodeBase64URL.
+// DecodeBase64URL decodes a Base32 string.
 func DecodeBase64URL(payload string) ([]byte, error) {
-	return urlSafeEncoding.DecodeString(payload)
+	// Base32 is case insensitive in our context, but Go's decoder expects uppercase.
+	return dnsEncoding.DecodeString(strings.ToUpper(payload))
 }
 
 // ZstdCodec wraps a compressor/decompressor pair that can optionally share

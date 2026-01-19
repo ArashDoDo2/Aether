@@ -3,8 +3,8 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN GOOS=linux GOARCH=amd64 go build -o /bin/aether-client ./cmd/client
-RUN GOOS=linux GOARCH=amd64 go build -o /bin/aether-server ./cmd/server
+RUN GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /bin/aether-client ./cmd/client
+RUN GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /bin/aether-server ./cmd/server
 
 FROM alpine:3.18
 RUN apk add --no-cache ca-certificates

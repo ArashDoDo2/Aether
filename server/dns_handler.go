@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"aether/common"
+
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
@@ -80,6 +81,9 @@ func (s *Server) Serve(ctx context.Context) error {
 	defer conn.Close()
 	s.conn = conn
 
+	// Start background cleanup (Garbage Collector)
+	go s.runCleanupLoop(ctx)
+
 	buf := make([]byte, 4096)
 	for {
 		select {
@@ -103,6 +107,38 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 		if resp != nil {
 			conn.WriteToUDP(resp, remote)
+		}
+	}
+}
+
+// runCleanupLoop periodically checks for and removes inactive sessions.
+func (s *Server) runCleanupLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.cleanup()
+		}
+	}
+}
+
+func (s *Server) cleanup() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	for id, state := range s.sessions {
+		state.mu.Lock()
+		idle := now.Sub(state.lastActive)
+		state.mu.Unlock()
+
+		if idle > 5*time.Minute {
+			state.closeRemote()
+			delete(s.sessions, id)
 		}
 	}
 }
@@ -231,10 +267,14 @@ func (s *Server) getSession(sessionID uint32) *sessionState {
 	state, ok := s.sessions[sessionID]
 	if !ok {
 		state = &sessionState{
-			pending: make(map[uint16][]byte),
+			pending:    make(map[uint16][]byte),
+			lastActive: time.Now(),
 		}
 		s.sessions[sessionID] = state
 	}
+	state.mu.Lock()
+	state.lastActive = time.Now()
+	state.mu.Unlock()
 	return state
 }
 
@@ -412,6 +452,7 @@ type sessionState struct {
 	downstreamSeq uint16
 	remoteConn    net.Conn
 	remoteAddr    string
+	lastActive    time.Time
 }
 
 func (s *sessionState) insert(seq uint16, payload []byte) {
